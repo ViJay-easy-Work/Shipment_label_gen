@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Shipment Labels</title>
+  <!-- Libraries for Excel, PDF, Barcode, and Canvas -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bwip-js@2.0.9/dist/bwip-js-min.js"></script>
+
+  <style>
+    body { font-family: Arial, sans-serif; }
+    .label {
+      width: 500px;
+      height:328px;
+      /* overflow: auto; */
+      border-left: 2px solid #000;
+      border-right: none;
+      margin: 20px auto;
+      background: #fff;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+    }
+    .row { display: flex; flex-wrap: wrap; }
+    .cell, .merged-cell {
+      border: 1px solid #000;
+      flex: 1;
+      box-sizing: border-box;
+      word-break: break-word;
+    }
+    .cell {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      /* padding: 6px; */
+    }
+    .cod {
+      background: #000;
+      color: #fff;
+      /* font-weight: bold; */
+      text-align: left;
+      font-size: 14px;
+      padding: 2px 6px;
+      margin-bottom: 4px;
+      white-space: nowrap;
+    }
+    .datamatrix {
+      margin-top: -4px;
+      margin-bottom: auto;
+      margin-left: auto;
+      margin-right: 18px;
+      width: 100px;
+      height: 100px;
+    }
+    .barcode {
+      margin-top: 2px;
+      width: 90%;
+      height: 70px;
+      /* overflow: ; */
+    }
+  </style>
+</head>
+<body>
+
+<h2>📦 Upload Excel to Generate Shipment Labels</h2>
+<input type="file" id="inputExcel" accept=".xlsx" />
+<button onclick="generatePDFs()">Generate PDFs</button>
+<div id="labelContainer"></div>
+
+<!-- Progress Modal -->
+<div id="progressModal" style="display: none; position: fixed; top: 0; left: 0;
+  width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 9999;
+  justify-content: center; align-items: center;">
+  <div style="background: #fff; padding: 20px 30px; border-radius: 10px;
+    text-align: center; box-shadow: 0 0 15px rgba(0,0,0,0.25);">
+    <h3 style="margin-top: 0;">🚚 Generating Shipment Labels...</h3>
+    <div style="width: 100%; background-color: #e0e0e0; border-radius: 5px;">
+      <div id="progressBar" style="width: 0%; height: 20px; background-color: #4caf50;
+        border-radius: 5px; transition: width 0.3s ease;"></div>
+    </div>
+    <p id="progressText" style="margin-top: 8px; font-weight: bold;">0% completed</p>
+  </div>
+</div>
+<script>
+  const labelContainer = document.getElementById("labelContainer");
+  let records = [];
+
+  document.getElementById('inputExcel').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const headers = rawRows[0].map(h => h.toLowerCase().trim());
+      const dataRows = rawRows.slice(1);
+      records = dataRows.map(row => {
+        const entry = {};
+        headers.forEach((h, i) => entry[h] = row[i]);
+        return entry;
+      });
+
+      labelContainer.innerHTML = '';
+      function truncateWords(text, maxWords) {
+        return text.split(/\s+/).slice(0, maxWords).join(" ");
+            }
+      records.forEach((row, index) => {
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.id = `label-${index}`;
+        label.innerHTML = `
+          <div class="row" style="height:240px;">
+
+            <!-- 📍 Customer & Return Sections -->
+              <div class="cell" style="flex:2.75;display: flex; flex-direction: column;position:relative;height:242px; ">
+                
+                <div class="customer-section" style="flex: 1; padding: 4px;">
+                  <strong style="padding:2px;font-size:11px;">Customer Address:</strong><br>
+                  <strong style="font-size:12px">${row["consignee_name"] || ""}</strong><br>
+                  <div style="font-size:${(row["consignee_address"]?.length > 70) ? '11px' : '14px'};">${row["consignee_address"] || ""}
+                  </div>
+                </div>
+                <div class="return-section" style="flex: 1; border-top:2px solid #000; padding-top:5px; padding:4px;">
+
+                  <strong style="padding:2px;font-size:11px;">If undelivered, return to:</strong><br>
+                  <strong style="font-weight:normal;font-size:12px">${row["parent_shipper_name"] || ""}</strong><br>
+                  <div style="font-size:${(row["parent_shipper_pincode"]?.length > 70) ? '11px' : '14px'};">
+                    ${row["parent_shipper_pincode"] || ""}
+                  </div>
+                </div>
+              </div>
+
+            <!-- 🚚 Valmo + Waybill Info -->
+            <div class="merged-cell" style="flex: 4; display: flex; flex-direction: column;position:relative;height:242px;border-left: 1px solid #000; border-right: none;">
+              <div class="cod">COD: Check payable amount on the app   </div>
+              <div style="padding-left:12px;display:inline-block;padding-top:5px;"><strong>Valmo</strong><span style="background: #000; color: #fff;font-size:14px; margin-left: 18px; font-weight:normal;">Pickup</span></div>
+              <div style="padding-left:10px;display:inline-block;padding-top:5px;"><strong>${row["last_scanned_location"] || ""}-RO</strong></div>
+              <div style="padding-left:10px;display:inline-block;margin-top:30px">
+                  <strong>${row["current_location"] || ""}</strong><br>
+                  <strong>${row["waybill_next_location"] || ""}</strong><br>
+                  <strong>${row["random_location"] || ""}</strong>
+              </div>
+              <div id="datamatrix-${index}" class="datamatrix" style="position: absolute; top: 30px; right: 2px; margin-bottom: 4px;"></div>
+              <svg id="barcode-${index}" class="barcode" ></svg>
+            </div>
+          </div>
+
+          <!-- 🛍️ Product Info Section -->
+          <div class="row" style="flex-direction: column;border-right: 2px solid #000;">
+            <div style="font-weight: bold;font-size:11px; text-align: left; padding: 4px;">Product Information</div>
+            <table style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr style="font-size:10px;">
+                  <th style="text-align: left;padding:4px">SKU</th>
+                  <th style="text-align: left;padding:4px">Size</th>
+                  <th style="text-align: left;padding-left:20px">Qty</th>
+                  <th style="text-align: left;padding-left:20px">Color</th>
+                  <th style="text-align: left;padding-left:26px">Order No.</th>
+                </tr>
+              </thead>
+             <tbody>
+                <tr style="font-size:10px;">
+                  <td style="width: 190px; padding: 4px; word-wrap: break-word; white-space: normal; overflow-wrap: break-word;">${truncateWords(row["item_description"] || "", 6)}</td>
+                  <td style="text-align:left;padding:4px">N/A</td>
+                  <td style="text-align:left;padding-left:20px">1</td>
+                  <td style="text-align:left;padding-left:20px">Multicolor</td>
+                  <td style="text-align:left;padding-left:26px">${row["order_no"] || ""}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 📄 Tax Invoice Row -->
+          <div class="row">
+            <div class="cell" style="flex:1 0 100%; display:flex; justify-content:space-between; font-weight:bold;">
+              <div style="text-align:right;margin-right:5px;font-size:12px; ">Tax Invoice<span style="margin-left:135px;font-size:8px;color:#000;">Original For Recipient</span></div>
+            </div>
+          </div>
+
+          <!-- 🧾 Billing Row -->
+          <div class="row">
+            <div class="cell" style="display:flex;flex:3.4; padding-left:6px;font-size:10px; font-weight:normal;" ><span>Bill to/Ship to</span></div>
+            <div class="cell" style="display:flex;flex:5; padding-left:6px;font-size:10px; font-weight:normal;" ><span>Sold By</span></div>
+          </div>
+        `;
+        labelContainer.appendChild(label);
+        renderDataMatrix(`datamatrix-${index}`, row["waybill_no"]);
+        renderBarcode(`barcode-${index}`, row["waybill_no"]);
+      });
+    };
+    reader.readAsArrayBuffer(file);
+  });
+
+  function renderDataMatrix(targetId, value) {
+    const canvas = document.createElement("canvas");
+    canvas.style.position = "relative";
+    canvas.style.left ="4px";
+    canvas.width = 100;
+    canvas.height = 100;
+    document.getElementById(targetId).appendChild(canvas);
+    bwipjs.toCanvas(canvas, {
+      bcid: 'datamatrix',
+      text: value || "N/A",
+      scale: 3,
+      padding: 0
+    });
+  }
+
+  function renderBarcode(targetId, value) {
+    const barcodeValue = value || "000000";
+
+    // Generate barcode
+    JsBarcode(`#${targetId}`, barcodeValue, {
+        format: "CODE128",
+        lineColor: "#000",
+        width: 3.31,
+        height: 75.56,
+        displayValue: false,
+        margin: 7
+    });
+
+    const barcodeElement = document.getElementById(targetId);
+    // barcodeElement.style.left = "8px";
+
+    // Create a wrapper to stack barcode and text
+    const wrapper = document.createElement('div');
+    wrapper.style.display = "flex";
+    wrapper.style.flexDirection = "column";
+    wrapper.style.alignItems = "center";
+    wrapper.style.position = "relative";
+
+    // Create overlapping text using negative margin
+    const textElement = document.createElement('div');
+    textElement.innerHTML = `<strong>${barcodeValue}</strong>`;
+    textElement.style.marginTop = "10px"; // pulls text upward
+    textElement.style.marginBottom = "-17px"; // pulls text upward
+    textElement.style.zIndex = "1";
+
+    // Move barcodeElement into wrapper
+    barcodeElement.parentNode.insertBefore(wrapper, barcodeElement);
+    wrapper.appendChild(textElement);
+    wrapper.appendChild(barcodeElement);
+}
+
+
+
+</script>
+<script>
+  async function generatePDFs() {
+    const { jsPDF } = window.jspdf;
+    const batchSize = 50;
+    const totalRecords = records.length;
+    const totalBatches = Math.ceil(totalRecords / batchSize);
+
+    const modal = document.getElementById('progressModal');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    modal.style.display = 'flex';
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+    let current = 0;
+
+    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+        const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' }); // Use landscape orientation
+
+        const start = batchIndex * batchSize;
+        const end = Math.min(start + batchSize, totalRecords);
+
+        for (let i = start; i < end; i++) {
+            const label = document.getElementById(`label-${i}`);
+            const canvas = await html2canvas(label, { useCORS: true, scale: 2 }); // Increase scale for better resolution
+            const imgData = canvas.toDataURL('image/png');
+
+            const labelWidth = 190; // Adjust label width as needed
+            const labelHeight = (canvas.height * labelWidth) / canvas.width;
+            const xOffset = (297 - labelWidth) / 2; // Centering in A4 landscape (297mm width)
+
+            if (i !== start) pdf.addPage();
+            pdf.addImage(imgData, 'PNG', xOffset, 10, labelWidth, labelHeight);
+            pdf.setFontSize(8);
+            // Remove or comment out the following line to eliminate page numbers
+            // pdf.text(`Page ${i + 1}`, xOffset + labelWidth - 20, 10 + labelHeight + 5);
+
+            current++;
+            const percent = Math.round((current / totalRecords) * 100);
+            progressBar.style.width = `${percent}%`;
+            progressText.textContent = `${percent}% completed`;
+        }
+
+        pdf.save(`shipment_batch_${batchIndex + 1}.pdf`);
+    }
+
+    modal.style.display = 'none';
+}
+
+</script>
+</body>
+</html>
